@@ -19,7 +19,7 @@ jobs:
       - name: Set Runner Password
         shell: powershell
         env:
-          PASS: ${{ secrets.RDP_PASSWORD }}
+          PASS: ${{ secrets.PASSWORD }}
         run: |
           $AdminUser = "runneradmin"
           net user $AdminUser "$env:PASS"
