@@ -1,0 +1,39 @@
+name: Windows Tailscale Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp-session:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Enable Remote Desktop
+        shell: powershell
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+
+      - name: Set Runner Password
+        shell: powershell
+        env:
+          PASS: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $AdminUser = "runneradmin"
+          net user $AdminUser "$env:PASS"
+
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          args: --hostname=gh-windows-runner --accept-routes
+
+      - name: Wait for Session
+        shell: powershell
+        run: |
+          Write-Host "Tailscale is up. Check your Tailscale machines list for 'gh-windows-runner'."
+          Write-Host "Log in with user 'runneradmin' and your secret password."
+          # Sleeps for 45 minutes or until manually cancelled
+          Start-Sleep -Seconds 2700
