@@ -12,29 +12,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Instant System Diagnostics
-        shell: powershell
+        shell: cmd
         run: |
-          Write-Host "================ SYSTEM SPECS ================"
-          # Instant CPU from registry
-          $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).ProcessorNameString
-          if (-not $cpuName) { $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).Identifier }
-
-          # Instant CPU threads
-          $logicalCores = [Environment]::ProcessorCount
-          
-          # Instant RAM in PS 5.1 (Only queries OS memory counter, NOT slow CPU hardware)
-          $ramKB = (Get-CimInstance -ClassName Win32_OperatingSystem -Property TotalVisibleMemorySize).TotalVisibleMemorySize
-          $ramGB = [math]::Round($ramKB / 1MB, 2)
-
-          # Instant Disk Free
-          $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
-
-          Write-Host "CPU Model       : $cpuName"
-          Write-Host "Logical Cores   : $logicalCores"
-          Write-Host "Total RAM       : $ramGB GB"
-          Write-Host "C: Drive Free   : $freeDisk GB"
-          Write-Host "Architecture    : $env:PROCESSOR_ARCHITECTURE"
-          Write-Host "=============================================="
+          @echo off
+          echo ================ SYSTEM SPECS ================
+          echo CPU Model       : %PROCESSOR_IDENTIFIER%
+          echo Logical Cores   : %NUMBER_OF_PROCESSORS%
+          echo Architecture    : %PROCESSOR_ARCHITECTURE%
+          echo System Root     : %SystemDrive%
+          echo ---------------- DISK STATUS ----------------
+          fsutil volume diskfree C:
+          echo ==============================================
 
       - name: Instant Background Disk Cleanup
         shell: powershell
