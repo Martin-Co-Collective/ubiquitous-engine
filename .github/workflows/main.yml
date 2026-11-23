@@ -11,21 +11,27 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: System Diagnostics
+      - name: Instant System Diagnostics
         shell: powershell
         run: |
           Write-Host "================ SYSTEM SPECS ================"
-          $cpu = Get-CimInstance Win32_Processor
-          $cores = ($cpu | Measure-Object -Property NumberOfCores -Sum).Sum
-          $logical = ($cpu | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
-          $disk = Get-PSDrive C | Select-Object @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
+          # Instant registry query instead of slow WMI/CIM
+          $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).ProcessorNameString
+          if (-not $cpuName) { $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).Identifier }
 
-          Write-Host "CPU Model       : $($cpu[0].Name)"
-          Write-Host "Physical Cores  : $cores"
-          Write-Host "Logical Cores   : $logical"
-          Write-Host "Total RAM       : $ram GB"
-          Write-Host "C: Drive Free   : $($disk.FreeGB) GB"
+          # Instant .NET calls
+          $logicalCores = [Environment]::ProcessorCount
+          $ramBytes = (New-Object Microsoft.VisualBasic.Devices.ComputerInfo).TotalPhysicalMemory
+          $ramGB = [math]::Round($ramBytes / 1GB, 2)
+
+          # Instant local drive check
+          $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
+
+          Write-Host "CPU Model       : $cpuName"
+          Write-Host "Logical Cores   : $logicalCores"
+          Write-Host "Total RAM       : $ramGB GB"
+          Write-Host "C: Drive Free   : $freeDisk GB"
+          Write-Host "Architecture    : $env:PROCESSOR_ARCHITECTURE"
           Write-Host "=============================================="
 
       - name: Instant Background Disk Cleanup
@@ -63,27 +69,27 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $ErrorActionPreference = 'Stop'
 
-          Write-Host "Finding latest Tailscale ARM64 MSI..."
+          Write-Host "Locating Tailscale ARM64 MSI package..."
           $html = (Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/" -UseBasicParsing).Content
           if ($html -match 'href="(?<url>[^"]*tailscale-setup-[0-9\.]+-arm64\.msi)"') {
               $msiFile = $Matches['url']
               $msiUrl = "https://pkgs.tailscale.com/stable/" + $msiFile
           } else {
-              # Fallback URL if parsing fails
+              # Fallback ARM64 release
               $msiUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.80.3-arm64.msi"
           }
 
           Write-Host "Downloading $msiUrl ..."
           (New-Object System.Net.WebClient).DownloadFile($msiUrl, "tailscale-arm64.msi")
 
-          Write-Host "Installing Tailscale MSI..."
+          Write-Host "Installing Tailscale silently for ARM64..."
           Start-Process msiexec.exe -ArgumentList "/i tailscale-arm64.msi /qn /norestart" -Wait -NoNewWindow
 
-          # Ensure the Tailscale service is running
+          # Start Tailscale service explicitly
           Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 4
 
-          Write-Host "Authenticating with Tailscale..."
+          Write-Host "Connecting to Tailscale..."
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-arm-01" --timeout=60s
 
       - name: Initialize System Environment
@@ -94,19 +100,19 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          # Strip GUI bloat and animations
+          # Strip UI animations and bloat
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
 
-          # Create user
+          # Create user credentials
           $user = "RDPUser"
           $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
           New-LocalUser -Name $user -Password $password -Description "Build Runner Access"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Poll for Tailscale IP safely without crashing on null
+          # Safe polling for IP (won't crash on null/empty strings)
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
               $rawIp = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
