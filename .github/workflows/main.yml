@@ -15,16 +15,49 @@ jobs:
         shell: powershell
         run: |
           Write-Host "================ SYSTEM SPECS ================"
-          # Instant registry query instead of slow WMI/CIM
+          # Read CPU directly from registry (instant)
           $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).ProcessorNameString
           if (-not $cpuName) { $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).Identifier }
 
-          # Instant .NET calls
+          # Direct .NET core calls (instant, compatible with PS 5.1 & PS 7+)
           $logicalCores = [Environment]::ProcessorCount
-          $ramBytes = (New-Object Microsoft.VisualBasic.Devices.ComputerInfo).TotalPhysicalMemory
-          $ramGB = [math]::Round($ramBytes / 1GB, 2)
+          
+          # Native memory check without missing assemblies
+          $ramBytes = 0
+          try {
+              $ramBytes = [System.GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
+          } catch {}
 
-          # Instant local drive check
+          if (-not $ramBytes -or $ramBytes -eq 0) {
+              Add-Type -TypeDefinition @'
+              using System;
+              using System.Runtime.InteropServices;
+              public class MemCheck {
+                  [StructLayout(LayoutKind.Sequential)]
+                  public struct MEMORYSTATUSEX {
+                      public uint dwLength;
+                      public uint dwMemoryLoad;
+                      public ulong ullTotalPhys;
+                      public ulong ullAvailPhys;
+                      public ulong ullTotalPageFile;
+                      public ulong ullAvailPageFile;
+                      public ulong ullTotalVirtual;
+                      public ulong ullAvailVirtual;
+                      public ulong ullAvailExtendedVirtual;
+                  }
+                  [DllImport("kernel32.dll", SetLastError = true)]
+                  public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+                  public static ulong GetTotal() {
+                      MEMORYSTATUSEX m = new MEMORYSTATUSEX();
+                      m.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+                      return GlobalMemoryStatusEx(ref m) ? m.ullTotalPhys : 0;
+                  }
+              }
+'@
+              $ramBytes = [MemCheck]::GetTotal()
+          }
+
+          $ramGB = [math]::Round($ramBytes / 1GB, 2)
           $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
 
           Write-Host "CPU Model       : $cpuName"
@@ -75,17 +108,16 @@ jobs:
               $msiFile = $Matches['url']
               $msiUrl = "https://pkgs.tailscale.com/stable/" + $msiFile
           } else {
-              # Fallback ARM64 release
               $msiUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.80.3-arm64.msi"
           }
 
           Write-Host "Downloading $msiUrl ..."
           (New-Object System.Net.WebClient).DownloadFile($msiUrl, "tailscale-arm64.msi")
 
-          Write-Host "Installing Tailscale silently for ARM64..."
+          Write-Host "Installing Tailscale MSI..."
           Start-Process msiexec.exe -ArgumentList "/i tailscale-arm64.msi /qn /norestart" -Wait -NoNewWindow
 
-          # Start Tailscale service explicitly
+          # Force service to start
           Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 4
 
@@ -100,19 +132,19 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          # Strip UI animations and bloat
+          # Strip GUI bloat and animations
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
 
-          # Create user credentials
+          # Create user
           $user = "RDPUser"
           $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
           New-LocalUser -Name $user -Password $password -Description "Build Runner Access"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Safe polling for IP (won't crash on null/empty strings)
+          # Safe Tailscale IP polling
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
               $rawIp = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
