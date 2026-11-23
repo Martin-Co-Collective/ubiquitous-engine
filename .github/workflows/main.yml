@@ -60,14 +60,17 @@ jobs:
           Write-Host "Installing Tailscale MSI..."
           Start-Process msiexec.exe -ArgumentList "/i tailscale-arm64.msi /qn /norestart" -Wait -NoNewWindow
 
-          # Restart & ensure service is running
-          Restart-Service -Name "Tailscale" -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          # Ensure service is set to automatic and started
+          Set-Service -Name "Tailscale" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 4
 
-          Write-Host "Connecting to Tailscale..."
-          # Run via cmd to avoid PowerShell native stream errors
-          cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" up --authkey %TAILSCALE_AUTHKEY% --hostname build-agent-arm-01 --timeout=60s"
-          $global:LASTEXITCODE = 0
+          Write-Host "Connecting to Tailscale network..."
+          # Running unattended and disabling DNS takeover keeps the machine solidly online
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TAILSCALE_AUTHKEY" --hostname="build-agent-arm-01" --unattended --accept-dns=false --accept-routes=true --timeout=60s
+
+          # Output connection status
+          & "C:\Program Files\Tailscale\tailscale.exe" status
 
       - name: Initialize System Environment
         shell: powershell
