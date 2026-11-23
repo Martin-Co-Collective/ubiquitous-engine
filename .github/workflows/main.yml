@@ -15,48 +15,16 @@ jobs:
         shell: powershell
         run: |
           Write-Host "================ SYSTEM SPECS ================"
-          # Read CPU directly from registry (instant)
           $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).ProcessorNameString
           if (-not $cpuName) { $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).Identifier }
 
-          # Direct .NET core calls (instant, compatible with PS 5.1 & PS 7+)
           $logicalCores = [Environment]::ProcessorCount
           
-          # Native memory check without missing assemblies
-          $ramBytes = 0
-          try {
-              $ramBytes = [System.GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
-          } catch {}
-
+          # Pure one-line native .NET memory query
+          $ramBytes = [System.GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
           if (-not $ramBytes -or $ramBytes -eq 0) {
-              Add-Type -TypeDefinition @'
-              using System;
-              using System.Runtime.InteropServices;
-              public class MemCheck {
-                  [StructLayout(LayoutKind.Sequential)]
-                  public struct MEMORYSTATUSEX {
-                      public uint dwLength;
-                      public uint dwMemoryLoad;
-                      public ulong ullTotalPhys;
-                      public ulong ullAvailPhys;
-                      public ulong ullTotalPageFile;
-                      public ulong ullAvailPageFile;
-                      public ulong ullTotalVirtual;
-                      public ulong ullAvailVirtual;
-                      public ulong ullAvailExtendedVirtual;
-                  }
-                  [DllImport("kernel32.dll", SetLastError = true)]
-                  public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
-                  public static ulong GetTotal() {
-                      MEMORYSTATUSEX m = new MEMORYSTATUSEX();
-                      m.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
-                      return GlobalMemoryStatusEx(ref m) ? m.ullTotalPhys : 0;
-                  }
-              }
-'@
-              $ramBytes = [MemCheck]::GetTotal()
+              $ramBytes = (Get-Process -Id $PID).WorkingSet64
           }
-
           $ramGB = [math]::Round($ramBytes / 1GB, 2)
           $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
 
@@ -117,7 +85,6 @@ jobs:
           Write-Host "Installing Tailscale MSI..."
           Start-Process msiexec.exe -ArgumentList "/i tailscale-arm64.msi /qn /norestart" -Wait -NoNewWindow
 
-          # Force service to start
           Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 4
 
@@ -127,24 +94,20 @@ jobs:
       - name: Initialize System Environment
         shell: powershell
         run: |
-          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          # Strip GUI bloat and animations
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
 
-          # Create user
           $user = "RDPUser"
           $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
           New-LocalUser -Name $user -Password $password -Description "Build Runner Access"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Safe Tailscale IP polling
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
               $rawIp = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
