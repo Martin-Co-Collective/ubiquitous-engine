@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-11-arm
 
     steps:
       - name: Checkout Code
@@ -63,18 +63,28 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $ErrorActionPreference = 'Stop'
 
-          Write-Host "Downloading Tailscale installer..."
-          (New-Object System.Net.WebClient).DownloadFile("https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe", "net-setup.exe")
-          
-          Write-Host "Installing Tailscale..."
-          Start-Process -FilePath .\net-setup.exe -ArgumentList "/quiet" -Wait -NoNewWindow
+          Write-Host "Finding latest Tailscale ARM64 MSI..."
+          $html = (Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/" -UseBasicParsing).Content
+          if ($html -match 'href="(?<url>[^"]*tailscale-setup-[0-9\.]+-arm64\.msi)"') {
+              $msiFile = $Matches['url']
+              $msiUrl = "https://pkgs.tailscale.com/stable/" + $msiFile
+          } else {
+              # Fallback URL if parsing fails
+              $msiUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.80.3-arm64.msi"
+          }
 
-          # Ensure the Tailscale service is actually running
+          Write-Host "Downloading $msiUrl ..."
+          (New-Object System.Net.WebClient).DownloadFile($msiUrl, "tailscale-arm64.msi")
+
+          Write-Host "Installing Tailscale MSI..."
+          Start-Process msiexec.exe -ArgumentList "/i tailscale-arm64.msi /qn /norestart" -Wait -NoNewWindow
+
+          # Ensure the Tailscale service is running
           Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 5
 
-          Write-Host "Connecting to Tailscale network..."
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-01" --timeout=60s
+          Write-Host "Authenticating with Tailscale..."
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-arm-01" --timeout=60s
 
       - name: Initialize System Environment
         shell: powershell
@@ -96,7 +106,7 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Poll for Tailscale IP safely instead of crashing on null
+          # Poll for Tailscale IP safely without crashing on null
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
               $rawIp = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
@@ -113,7 +123,7 @@ jobs:
 
           Write-Host "=========================================="
           Write-Host " ENVIRONMENT READY FOR ACCESS"
-          Write-Host " Hostname / IP : $tsIp (or build-agent-01)"
+          Write-Host " Hostname / IP : $tsIp (or build-agent-arm-01)"
           Write-Host " Username      : $user"
           Write-Host " Password      : StrongPass123!"
           Write-Host "=========================================="
