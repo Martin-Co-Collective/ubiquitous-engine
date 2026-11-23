@@ -11,19 +11,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Instant System Diagnostics
-        shell: cmd
-        run: |
-          @echo off
-          echo ================ SYSTEM SPECS ================
-          echo CPU Model       : %PROCESSOR_IDENTIFIER%
-          echo Logical Cores   : %NUMBER_OF_PROCESSORS%
-          echo Architecture    : %PROCESSOR_ARCHITECTURE%
-          echo System Root     : %SystemDrive%
-          echo ---------------- DISK STATUS ----------------
-          fsutil volume diskfree C:
-          echo ==============================================
-
       - name: Instant Background Disk Cleanup
         shell: powershell
         run: |
@@ -57,7 +44,6 @@ jobs:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          $ErrorActionPreference = 'Stop'
 
           Write-Host "Locating Tailscale ARM64 MSI package..."
           $html = (Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/" -UseBasicParsing).Content
@@ -74,52 +60,48 @@ jobs:
           Write-Host "Installing Tailscale MSI..."
           Start-Process msiexec.exe -ArgumentList "/i tailscale-arm64.msi /qn /norestart" -Wait -NoNewWindow
 
-          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 4
+          # Restart & ensure service is running
+          Restart-Service -Name "Tailscale" -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
 
           Write-Host "Connecting to Tailscale..."
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-arm-01" --timeout=60s
+          # Running via cmd prevents PowerShell NativeCommandError crashes
+          cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" up --authkey %TAILSCALE_AUTHKEY% --hostname build-agent-arm-01 --timeout=60s"
 
       - name: Initialize System Environment
         shell: powershell
         run: |
+          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
+          # Strip UI animations and bloat
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
 
+          # Create credentials
           $user = "RDPUser"
           $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
           New-LocalUser -Name $user -Password $password -Description "Build Runner Access"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
+          # Safe IP check via CMD (doesn't trigger PS NativeCommandError)
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
-              $rawIp = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
-              if ($rawIp) {
-                  $tsIp = $rawIp.Trim()
+              $rawIp = (cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" ip -4 2>nul").Trim()
+              if ($rawIp -and $rawIp -notmatch "no current Tailscale IPs") {
+                  $tsIp = $rawIp
                   break
               }
               Start-Sleep -Seconds 2
           }
 
           if (-not $tsIp) {
-              $tsIp = "Pending / Check Tailscale Admin Console"
+              $tsIp = "Unassigned / Check Auth Key in GitHub Secrets"
           }
 
           Write-Host "=========================================="
-          Write-Host " ENVIRONMENT READY FOR ACCESS"
-          Write-Host " Hostname / IP : $tsIp (or build-agent-arm-01)"
-          Write-Host " Username      : $user"
-          Write-Host " Password      : StrongPass123!"
-          Write-Host "=========================================="
-
-      - name: Run Build Tasks
-        shell: powershell
-        run: |
-          Write-Host "Build workload active. Pipeline standing by."
-          Start-Sleep -Seconds 21600
+          Write-Host " ENVIRONMENT READY FOR ACCESSThis request was blocked by Gemini's filters. They can occasionally trigger by mistake on safe coding, security, or biology-related queries. Please try rephrasing your prompt. You can [send feedback](https://aistudio.google.com/docs/troubleshooting#file-bug) or read more about [our policies here](https://policies.google.com/terms/generative-ai/use-policy).
