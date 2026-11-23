@@ -87,13 +87,16 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Safe IP check via CMD (avoids PowerShell NativeCommandError)
+          # Safe IP check: avoid calling .Trim() on null
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
-              $rawIp = (cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" ip -4 2>nul").Trim()
-              if ($rawIp -and $rawIp -notmatch "no current Tailscale IPs") {
-                  $tsIp = $rawIp
-                  break
+              $output = cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" ip -4 2>nul"
+              if (-not [string]::IsNullOrWhiteSpace($output)) {
+                  $cleanIp = $output.ToString().Trim()
+                  if ($cleanIp -notmatch "no current Tailscale IPs") {
+                      $tsIp = $cleanIp
+                      break
+                  }
               }
               Start-Sleep -Seconds 2
           }
