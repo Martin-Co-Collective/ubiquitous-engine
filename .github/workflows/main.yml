@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-11-arm
+    runs-on: windows-latest
 
     steps:
       - name: Checkout Code
@@ -63,11 +63,18 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $ErrorActionPreference = 'Stop'
 
+          Write-Host "Downloading Tailscale installer..."
           (New-Object System.Net.WebClient).DownloadFile("https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe", "net-setup.exe")
+          
+          Write-Host "Installing Tailscale..."
           Start-Process -FilePath .\net-setup.exe -ArgumentList "/quiet" -Wait -NoNewWindow
 
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-01"
-          Write-Host "Network service connected."
+          # Ensure the Tailscale service is actually running
+          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+
+          Write-Host "Connecting to Tailscale network..."
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-01" --timeout=60s
 
       - name: Initialize System Environment
         shell: powershell
@@ -77,7 +84,7 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          # Strip GUI bloat and animations to make RDP actually responsive
+          # Strip GUI bloat and animations
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
@@ -89,8 +96,20 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Get Tailscale IP
-          $tsIp = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
+          # Poll for Tailscale IP safely instead of crashing on null
+          $tsIp = ""
+          for ($i = 0; $i -lt 15; $i++) {
+              $rawIp = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
+              if ($rawIp) {
+                  $tsIp = $rawIp.Trim()
+                  break
+              }
+              Start-Sleep -Seconds 2
+          }
+
+          if (-not $tsIp) {
+              $tsIp = "Pending / Check Tailscale Admin Console"
+          }
 
           Write-Host "=========================================="
           Write-Host " ENVIRONMENT READY FOR ACCESS"
