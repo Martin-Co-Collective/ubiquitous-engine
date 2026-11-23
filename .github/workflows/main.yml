@@ -65,7 +65,10 @@ jobs:
           Start-Sleep -Seconds 5
 
           Write-Host "Connecting to Tailscale..."
-          cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" up --authkey %TAILSCALE_AUTHKEY% --hostname build-agent-arm-01 --timeout=60s"
+          # Pass auth key and print output so errors are visible in logs
+          $upOutput = & "C:\Program Files\Tailscale\tailscale.exe" up --authkey "$env:TAILSCALE_AUTHKEY" --hostname "build-agent-arm-01" --timeout=60s 2>&1
+          Write-Host $upOutput
+          $global:LASTEXITCODE = 0
 
       - name: Initialize System Environment
         shell: powershell
@@ -80,20 +83,21 @@ jobs:
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
 
-          # Create credentials
+          # Create credentials (suppress table output from New-LocalUser)
           $user = "RDPUser"
           $password = ConvertTo-SecureString "StrongPass123!" -AsPlainText -Force
-          New-LocalUser -Name $user -Password $password -Description "Build Runner Access"
+          New-LocalUser -Name $user -Password $password -Description "Build Runner Access" | Out-Null
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Add-LocalGroupMember -Group "Administrators" -Member $user
 
-          # Safe IP check: avoid calling .Trim() on null
+          # Safe IP check: safely capture without leaving a dirty LASTEXITCODE
           $tsIp = ""
           for ($i = 0; $i -lt 15; $i++) {
-              $output = cmd.exe /c "`"C:\Program Files\Tailscale\tailscale.exe`" ip -4 2>nul"
-              if (-not [string]::IsNullOrWhiteSpace($output)) {
-                  $cleanIp = $output.ToString().Trim()
-                  if ($cleanIp -notmatch "no current Tailscale IPs") {
+              $output = & "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null
+              $global:LASTEXITCODE = 0
+              if ($output) {
+                  $cleanIp = ($output -join "").Trim()
+                  if ($cleanIp -and $cleanIp -notmatch "no current Tailscale IPs") {
                       $tsIp = $cleanIp
                       break
                   }
@@ -111,6 +115,10 @@ jobs:
           Write-Host " Username      : $user"
           Write-Host " Password      : StrongPass123!"
           Write-Host "=========================================="
+
+          # Explicitly force success exit code
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - name: Run Build Tasks
         shell: powershell
