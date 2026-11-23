@@ -15,17 +15,18 @@ jobs:
         shell: powershell
         run: |
           Write-Host "================ SYSTEM SPECS ================"
+          # Instant CPU from registry
           $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).ProcessorNameString
           if (-not $cpuName) { $cpuName = (Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction SilentlyContinue).Identifier }
 
+          # Instant CPU threads
           $logicalCores = [Environment]::ProcessorCount
           
-          # Pure one-line native .NET memory query
-          $ramBytes = [System.GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
-          if (-not $ramBytes -or $ramBytes -eq 0) {
-              $ramBytes = (Get-Process -Id $PID).WorkingSet64
-          }
-          $ramGB = [math]::Round($ramBytes / 1GB, 2)
+          # Instant RAM in PS 5.1 (Only queries OS memory counter, NOT slow CPU hardware)
+          $ramKB = (Get-CimInstance -ClassName Win32_OperatingSystem -Property TotalVisibleMemorySize).TotalVisibleMemorySize
+          $ramGB = [math]::Round($ramKB / 1MB, 2)
+
+          # Instant Disk Free
           $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
 
           Write-Host "CPU Model       : $cpuName"
